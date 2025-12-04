@@ -22,6 +22,24 @@ services:
       retries: 10
       start_period: 10s
 
+  # Redis Cache
+  redis-pweb:
+    image: redis:7-alpine
+    container_name: redis-pweb
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_pweb_data:/data
+    networks:
+      - todo-pweb-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
   # Backend API
   backend-pweb:
     build:
@@ -36,10 +54,14 @@ services:
       DB_USER: postgres
       DB_PASSWORD: postgres
       DB_NAME: todolist
+      REDIS_HOST: redis-pweb
+      REDIS_PORT: 6379
     ports:
       - "3000:3000"
     depends_on:
       db-pweb:
+        condition: service_healthy
+      redis-pweb:
         condition: service_healthy
     networks:
       - todo-pweb-network
@@ -67,3 +89,4 @@ networks:
 
 volumes:
   postgres_pweb_data:
+  redis_pweb_data:
