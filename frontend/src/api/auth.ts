@@ -16,13 +16,19 @@ export interface User {
   id: string;
   name: string;
   email: string;
-  photo?: string;
+  profile_picture?: string;
 }
 
 export interface ProfileUpdateRequest {
   name?: string;
   email?: string;
-  photo?: string;
+  profile_picture?: string;
+}
+
+export interface RegisterRequest {
+  name: string;
+  email: string;
+  password: string;
 }
 
 export const login = async (email: string, password: string): Promise<LoginResponse | null> => {
@@ -52,6 +58,32 @@ export const login = async (email: string, password: string): Promise<LoginRespo
   }
 };
 
+export const registerUser = async (data: RegisterRequest): Promise<boolean> => {
+  const loadingToastId = showLoading("Criando conta...");
+  try {
+    const response = await fetch(`${API_BASE_URL}/signup`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(data),
+    });
+
+    if (response.ok) {
+      dismissToast(loadingToastId);
+      showSuccess("Conta criada com sucesso! Faça login.");
+      return true;
+    } else {
+      throw new Error("Falha ao criar conta");
+    }
+  } catch (error) {
+    dismissToast(loadingToastId);
+    showError("Erro ao criar conta. Tente novamente.");
+    console.error("Erro no cadastro:", error);
+    return false;
+  }
+};
+
 export const getProfile = async (accessToken: string): Promise<User | null> => {
   try {
     const response = await fetch(`${API_BASE_URL}/profile`, {
@@ -76,17 +108,27 @@ export const getProfile = async (accessToken: string): Promise<User | null> => {
 
 export const updateProfile = async (
   accessToken: string,
-  profileData: ProfileUpdateRequest
+  profileData: FormData | ProfileUpdateRequest
 ): Promise<User | null> => {
   const loadingToastId = showLoading("Atualizando perfil...");
   try {
+    const isFormData = profileData instanceof FormData;
+
+    // Se for FormData, não definimos Content-Type (o browser define com boundary)
+    const headers: HeadersInit = {
+      "Authorization": `Bearer ${accessToken}`,
+    };
+
+    if (!isFormData) {
+      headers["Content-Type"] = "application/json";
+    }
+
+    const body = isFormData ? profileData : JSON.stringify(profileData);
+
     const response = await fetch(`${API_BASE_URL}/profile`, {
       method: "PUT",
-      headers: {
-        "Authorization": `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(profileData),
+      headers,
+      body,
     });
 
     if (response.ok) {

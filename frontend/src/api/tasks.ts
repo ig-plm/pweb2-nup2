@@ -21,9 +21,11 @@ export const fetchTasks = async (accessToken: string): Promise<Task[]> => {
     if (!response.ok) {
       throw new Error("Falha ao buscar tarefas.");
     }
-    const data: Task[] = await response.json();
+    const jsonResponse = await response.json();
+    // O backend retorna { cache: "...", data: [...] }
+    const data: Task[] = Array.isArray(jsonResponse) ? jsonResponse : jsonResponse.data;
     dismissToast(loadingToastId);
-    return data;
+    return data || [];
   } catch (error) {
     dismissToast(loadingToastId);
     showError("Erro ao carregar tarefas.");

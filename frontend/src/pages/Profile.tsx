@@ -8,13 +8,13 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { useAuth } from '@/contexts/AuthContext';
-import { updateProfile, getProfile } from '@/api/auth';
-import { Loader2, User, Edit3, Save, X } from 'lucide-react';
+import { updateProfile } from '@/api/auth';
+import { Loader2, User, Edit3, Save, X, Upload } from 'lucide-react';
 
+// Schema agora valida apenas texto, arquivo é tratado separadamente por enquanto ou via custom validation
 const profileSchema = z.object({
   name: z.string().min(2, 'Nome deve ter pelo menos 2 caracteres'),
   email: z.string().email('Email inválido'),
-  photo: z.string().url('URL da foto inválida').optional().or(z.literal('')),
 });
 
 type ProfileFormData = z.infer<typeof profileSchema>;
@@ -22,6 +22,8 @@ type ProfileFormData = z.infer<typeof profileSchema>;
 const Profile = () => {
   const [isEditing, setIsEditing] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const { user, tokens, updateUser } = useAuth();
 
   const {
@@ -34,7 +36,6 @@ const Profile = () => {
     defaultValues: {
       name: user?.name || '',
       email: user?.email || '',
-      photo: user?.photo || '',
     },
   });
 
@@ -43,26 +44,41 @@ const Profile = () => {
       reset({
         name: user.name,
         email: user.email,
-        photo: user.photo || '',
       });
     }
   }, [user, reset]);
 
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      setSelectedFile(file);
+      const objectUrl = URL.createObjectURL(file);
+      setPreviewUrl(objectUrl);
+    }
+  };
+
   const onSubmit = async (data: ProfileFormData) => {
+    if (!tokens?.accessToken) return;
+
     setIsLoading(true);
     try {
-      // TEMPORÁRIO: Mockar atualização para teste
-      await new Promise(resolve => setTimeout(resolve, 1000)); // Simular delay
-      
-      const updatedUser = {
-        id: user?.id || '1',
-        name: data.name,
-        email: data.email,
-        photo: data.photo || ''
-      };
-      
-      updateUser(updatedUser);
-      setIsEditing(false);
+      const formData = new FormData();
+      formData.append('name', data.name);
+      // Backend ignora email update por segurança, mas enviamos se necessário
+      // formData.append('email', data.email); 
+
+      if (selectedFile) {
+        formData.append('profile_picture', selectedFile);
+      }
+
+      const updatedUser = await updateProfile(tokens.accessToken, formData);
+
+      if (updatedUser) {
+        updateUser(updatedUser);
+        setIsEditing(false);
+        setSelectedFile(null);
+        setPreviewUrl(null);
+      }
     } catch (error) {
       console.error('Erro ao atualizar perfil:', error);
     } finally {
@@ -74,8 +90,9 @@ const Profile = () => {
     reset({
       name: user?.name || '',
       email: user?.email || '',
-      photo: user?.photo || '',
     });
+    setSelectedFile(null);
+    setPreviewUrl(null);
     setIsEditing(false);
   };
 
@@ -100,16 +117,36 @@ const Profile = () => {
           </CardHeader>
           <CardContent className="space-y-6">
             {/* Avatar Section */}
-            <div className="flex items-center space-x-4">
-              <Avatar className="h-20 w-20">
-                <AvatarImage src={user?.photo} alt={user?.name} />
-                <AvatarFallback className="text-lg">
-                  {user?.name ? getInitials(user.name) : <User className="h-8 w-8" />}
+            <div className="flex flex-col items-center space-y-4">
+              <Avatar className="h-32 w-32 border-4 border-white shadow-lg">
+                <AvatarImage src={previewUrl || user?.profile_picture} alt={user?.name} className="object-cover" />
+                <AvatarFallback className="text-4xl bg-gray-200">
+                  {user?.name ? getInitials(user.name) : <User className="h-12 w-12" />}
                 </AvatarFallback>
               </Avatar>
-              <div>
-                <h3 className="text-lg font-semibold">{user?.name}</h3>
-                <p className="text-gray-600">{user?.email}</p>
+
+              {isEditing && (
+                <div className="flex items-center space-x-2">
+                  <Input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    id="profile-upload"
+                    onChange={handleFileChange}
+                  />
+                  <Label
+                    htmlFor="profile-upload"
+                    className="cursor-pointer bg-primary text-primary-foreground hover:bg-primary/90 h-9 px-4 py-2 rounded-md flex items-center gap-2 text-sm font-medium transition-colors"
+                  >
+                    <Upload className="h-4 w-4" />
+                    Alterar Foto
+                  </Label>
+                </div>
+              )}
+
+              <div className="text-center">
+                <h3 className="text-xl font-semibold">{user?.name}</h3>
+                <p className="text-gray-500">{user?.email}</p>
               </div>
             </div>
 
@@ -134,31 +171,13 @@ const Profile = () => {
                   id="email"
                   type="email"
                   {...register('email')}
-                  disabled={!isEditing}
-                  className={errors.email ? 'border-red-500' : ''}
+                  disabled // Email geralmente não é editável facilmente
+                  className="bg-gray-100 cursor-not-allowed"
                 />
-                {errors.email && (
-                  <p className="text-sm text-red-500">{errors.email.message}</p>
-                )}
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="photo">URL da Foto</Label>
-                <Input
-                  id="photo"
-                  type="url"
-                  placeholder="https://exemplo.com/foto.jpg"
-                  {...register('photo')}
-                  disabled={!isEditing}
-                  className={errors.photo ? 'border-red-500' : ''}
-                />
-                {errors.photo && (
-                  <p className="text-sm text-red-500">{errors.photo.message}</p>
-                )}
               </div>
 
               {/* Action Buttons */}
-              <div className="flex space-x-2">
+              <div className="flex justify-end space-x-2 pt-4">
                 {!isEditing ? (
                   <Button
                     type="button"
@@ -166,10 +185,19 @@ const Profile = () => {
                     className="flex items-center space-x-2"
                   >
                     <Edit3 className="h-4 w-4" />
-                    <span>Editar</span>
+                    <span>Editar Perfil</span>
                   </Button>
                 ) : (
                   <>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleCancel}
+                      className="flex items-center space-x-2"
+                    >
+                      <X className="h-4 w-4" />
+                      <span>Cancelar</span>
+                    </Button>
                     <Button
                       type="submit"
                       disabled={isLoading}
@@ -183,18 +211,9 @@ const Profile = () => {
                       ) : (
                         <>
                           <Save className="h-4 w-4" />
-                          <span>Salvar</span>
+                          <span>Salvar Alterações</span>
                         </>
                       )}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={handleCancel}
-                      className="flex items-center space-x-2"
-                    >
-                      <X className="h-4 w-4" />
-                      <span>Cancelar</span>
                     </Button>
                   </>
                 )}

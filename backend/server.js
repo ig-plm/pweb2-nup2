@@ -1,166 +1,206 @@
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
-import dotenv from "dotenv";
+import bcrypt from "bcrypt";
+import jwt from "jsonwebtoken";
+import multer from "multer";
 import bd from "./src/models/index.js";
 import redisClient from "./src/config/redis.js";
-import cacheStats from "./src/utils/cacheStats.js";
-import memoryCache from "./src/utils/memoryCache.js";
+import supabase from "./src/config/supabase.js";
+import authMiddleware from "./src/middleware/auth.js";
 
-dotenv.config();
-
-const { Task } = bd;
-
-// Testa a conexão com o banco de dados
-try {
-  await bd.sequelize.authenticate();
-  console.log("Conexão com o banco de dados estabelecida com sucesso.");
-} catch (error) {
-  console.error("Erro ao conectar ao banco de dados:", error);
-  process.exit(1);
-}
-
-// Testa a conexão com o Redis
-try {
-  await redisClient.ping();
-  console.log("Conexão com o Redis estabelecida com sucesso.");
-} catch (error) {
-  console.error("Erro ao conectar ao Redis:", error);
-  // Não encerra o servidor se o Redis falhar, apenas loga o erro
-}
-
+const { Task, User } = bd;
 const app = express();
 const port = 3000;
+
+// Configuração do Multer para upload de arquivos em memória
+const storage = multer.memoryStorage();
+const upload = multer({ storage: storage });
 
 app.use(express.json());
 app.use(cors());
 
-app.get("/", (req, res) => {
-  res.json({ message: "Hello World" });
-});
+// --- Autenticação ---
 
-// Endpoint para visualizar estatísticas de cache
-app.get("/cache/stats", (req, res) => {
-  const stats = cacheStats.getStats();
-  res.json({
-    message: "Estatísticas de Cache",
-    stats: {
-      hits: stats.hits,
-      misses: stats.misses,
-      errors: stats.errors,
-      total: stats.total,
-      hitRate: `${stats.hitRate.toFixed(2)}%`,
-      missRate: `${stats.missRate.toFixed(2)}%`
-    },
-    description: {
-      hits: "Número de requisições que retornaram dados do cache (Cache Hit)",
-      misses: "Número de requisições que buscaram dados do banco (Cache Miss)",
-      errors: "Número de erros ao acessar o cache",
-      total: "Total de requisições processadas",
-      hitRate: "Percentual de Cache Hit (eficiência do cache)",
-      missRate: "Percentual de Cache Miss"
+// Signin
+app.post("/signin", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const user = await User.findOne({ where: { email } });
+
+    if (!user) {
+      return res.status(401).json({ error: "Usuário não encontrado" });
     }
-  });
+
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) {
+      return res.status(401).json({ error: "Senha incorreta" });
+    }
+
+    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
+      expiresIn: "1d",
+    });
+
+    res.json({ token, user: { id: user.id, name: user.name, email: user.email, profile_picture: user.profile_picture } });
+  } catch (error) {
+    console.error("Erro no login:", error);
+    res.status(500).json({ error: "Erro interno no servidor" });
+  }
 });
 
-// Endpoint para resetar estatísticas de cache
-app.post("/cache/stats/reset", (req, res) => {
-  cacheStats.reset();
-  res.json({ message: "Estatísticas de cache resetadas com sucesso" });
+// Signup (Auxiliar)
+app.post("/signup", async (req, res) => {
+  try {
+    const { name, email, password } = req.body;
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const user = await User.create({ name, email, password: hashedPassword });
+    res.status(201).json(user);
+  } catch (error) {
+    console.error("Erro no cadastro:", error);
+    res.status(400).json({ error: "Erro ao criar usuário" });
+  }
 });
+
+// Profile (Protegido + Upload)
+app.put("/profile", authMiddleware, upload.single("profile_picture"), async (req, res) => {
+  try {
+    const user = await User.findByPk(req.userId);
+    if (!user) return res.status(404).json({ error: "Usuário não encontrado" });
+
+    const { name } = req.body;
+    if (name) user.name = name;
+
+    if (req.file) {
+      const file = req.file;
+      const fileName = `avatar_${user.id}_${Date.now()}`;
+
+      const { data, error } = await supabase.storage
+        .from("avatars")
+        .upload(fileName, file.buffer, {
+          contentType: file.mimetype,
+        });
+
+      if (error) throw error;
+
+      const { data: publicUrlData } = supabase.storage
+        .from("avatars")
+        .getPublicUrl(fileName);
+
+      user.profile_picture = publicUrlData.publicUrl;
+    }
+
+    await user.save();
+    res.json(user);
+  } catch (error) {
+    console.error("Erro ao atualizar perfil:", error);
+    res.status(500).json({ error: "Erro ao atualizar perfil" });
+  }
+});
+
+app.get("/profile", authMiddleware, async (req, res) => {
+  try {
+    const user = await User.findByPk(req.userId);
+    res.json(user);
+  } catch (error) {
+    res.status(500).json({ error: "Erro ao buscar perfil" });
+  }
+});
+
+// --- Tasks (com Redis) ---
 
 app.get("/tasks", async (req, res) => {
   const cacheKey = "tasks:all";
-  
+
   try {
-    // Verifica se o cache existe
-    const cachedTasks = memoryCache.get(cacheKey);
-    
-    if (cachedTasks !== null) {
-      // Cache Hit: dados encontrados no cache
+    const cachedTasks = await redisClient.get(cacheKey);
+
+    if (cachedTasks) {
       return res.json({
         cache: "cache-hit",
-        data: cachedTasks
+        data: JSON.parse(cachedTasks)
       });
     }
-    
-    // Cache Miss: dados não encontrados, busca do banco
+
     const tasks = await Task.findAll();
-    const tasksJson = tasks.map(task => task.toJSON());
-    
-    // Salva no cache em memória
-    memoryCache.set(cacheKey, tasksJson);
-    
-    // Retorna com indicador de cache-miss
+
+    // Cache por 1 hora (3600s)
+    await redisClient.setex(cacheKey, 3600, JSON.stringify(tasks));
+
     res.json({
       cache: "cache-miss",
       data: tasks
     });
-    
+
   } catch (error) {
     console.error("Erro ao buscar tasks:", error);
-    res.status(500).json({ error: "Erro ao buscar tasks" });
+    // Fallback para banco se Redis falhar
+    try {
+      const tasks = await Task.findAll();
+      res.json({ cache: "error", data: tasks });
+    } catch (dbError) {
+      res.status(500).json({ error: "Erro ao buscar tasks" });
+    }
   }
 });
 
 app.post("/tasks", async (req, res) => {
   const { description } = req.body;
   if (!description) return res.status(400).json({ error: "Descrição obrigatória" });
-  const task = await Task.create({ description, completed: false });
-  
-  // Invalida o cache (define como null)
-  memoryCache.invalidate("tasks:all");
-  
-  res.status(201).json(task);
-});
 
-app.get("/tasks/:id", async (req, res) => {
   try {
-    const cacheKey = `tasks:${req.params.id}`;
-    const cachedTask = await redisClient.get(cacheKey);
-    
-    if (cachedTask) {
-      console.log(`Retornando task ${req.params.id} do cache`);
-      return res.json(JSON.parse(cachedTask));
-    }
-    
-    const task = await Task.findByPk(req.params.id);
-    if (!task) return res.status(404).json({ error: "Tarefa não encontrada" });
-    
-    // Armazena no cache por 60 segundos
-    await redisClient.setex(cacheKey, 60, JSON.stringify(task.toJSON()));
-    
-    res.json(task);
+    const task = await Task.create({ description, completed: false });
+
+    // Invalida o cache
+    await redisClient.del("tasks:all");
+
+    res.status(201).json(task);
   } catch (error) {
-    console.error("Erro ao buscar task:", error);
-    const task = await Task.findByPk(req.params.id);
-    if (!task) return res.status(404).json({ error: "Tarefa não encontrada" });
-    res.json(task);
+    res.status(500).json({ error: "Erro ao criar tarefa" });
   }
 });
 
 app.put("/tasks/:id", async (req, res) => {
   const { description, completed } = req.body;
-  const task = await Task.findByPk(req.params.id);
-  if (!task) return res.status(404).json({ error: "Tarefa não encontrada" });
-  await task.update({ description, completed });
-  
-  // Invalida o cache (define como null)
-  memoryCache.invalidate("tasks:all");
-  
-  res.json(task);
+  try {
+    const task = await Task.findByPk(req.params.id);
+    if (!task) return res.status(404).json({ error: "Tarefa não encontrada" });
+
+    await task.update({ description, completed });
+
+    // Invalida o cache geral e específico (se houver)
+    await redisClient.del("tasks:all");
+    await redisClient.del(`tasks:${req.params.id}`);
+
+    res.json(task);
+  } catch (error) {
+    res.status(500).json({ error: "Erro ao atualizar tarefa" });
+  }
 });
 
 app.delete("/tasks/:id", async (req, res) => {
-  const deleted = await Task.destroy({ where: { id: req.params.id } });
-  if (!deleted) return res.status(404).json({ error: "Tarefa não encontrada" });
-  
-  // Invalida o cache (define como null)
-  memoryCache.invalidate("tasks:all");
-  
-  res.status(204).send();
+  try {
+    const deleted = await Task.destroy({ where: { id: req.params.id } });
+    if (!deleted) return res.status(404).json({ error: "Tarefa não encontrada" });
+
+    // Invalida o cache
+    await redisClient.del("tasks:all");
+    await redisClient.del(`tasks:${req.params.id}`);
+
+    res.status(204).send();
+  } catch (error) {
+    res.status(500).json({ error: "Erro ao deletar tarefa" });
+  }
 });
 
-app.listen(port, '0.0.0.0', () => {
+// --- Inicialização ---
+
+app.listen(port, '0.0.0.0', async () => {
   console.log(`Server is running on port ${port}`);
-  console.log(`Database is running on port ${process.env.DB_PORT}`);
+
+  try {
+    await bd.sequelize.authenticate();
+    console.log("Conexão com o banco de dados estabelecida.");
+  } catch (error) {
+    console.error("Aviso: Não foi possível conectar ao banco de dados na inicialização:", error.message);
+  }
 });

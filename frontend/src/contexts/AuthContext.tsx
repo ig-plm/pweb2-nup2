@@ -4,7 +4,7 @@ interface User {
   id: string;
   name: string;
   email: string;
-  photo?: string;
+  profile_picture?: string;
 }
 
 interface AuthTokens {
@@ -42,7 +42,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     id: '1',
     name: 'João Silva',
     email: 'joao.silva@exemplo.com',
-    photo: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150&h=150&fit=crop&crop=face'
+    profile_picture: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150&h=150&fit=crop&crop=face'
   });
   const [tokens, setTokens] = useState<AuthTokens | null>({
     accessToken: 'mock-access-token',
@@ -62,7 +62,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         if (storedTokens && storedUser) {
           const parsedTokens = JSON.parse(storedTokens);
           const parsedUser = JSON.parse(storedUser);
-          
+
           setTokens(parsedTokens);
           setUser(parsedUser);
         }
@@ -92,10 +92,10 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       if (response.ok) {
         const data = await response.json();
         const { accessToken, refreshToken } = data;
-        
+
         setTokens({ accessToken, refreshToken });
         localStorage.setItem('authTokens', JSON.stringify({ accessToken, refreshToken }));
-        
+
         // Buscar dados do usuário
         const userResponse = await fetch(`${API_BASE_URL}/profile`, {
           headers: {
@@ -113,7 +113,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
             id: '1',
             name: email.split('@')[0],
             email: email,
-            photo: ''
+            profile_picture: ''
           };
           setUser(basicUser);
           localStorage.setItem('user', JSON.stringify(basicUser));
